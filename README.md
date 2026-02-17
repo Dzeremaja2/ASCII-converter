@@ -15,4 +15,27 @@ After you installed all necessery libraries you can run the code and I encourage
 1. You load wanted image into the right top window;
 2. Paste the ASCII algorithm PY
 3. **Load ASCII atlas texture** that is provided in "Textures" folder (choose one named only "ASCII")
-   - Now you are supposed to see something in the result window on the right side. If there is nothing to show, press the Force refresh button. You should see black and white image with outlines. These are here to help you dial the looks of edge engine by sliding the Sigma_1 and Sigma_2 sliders (you can also tweak the settings with threshold and gain sliders)
+   - Now you are supposed to see something in the result window on the right side. If there is nothing to show, press the Force refresh button. You should see black and white image with outlines. These are here to help you dial the looks of edge engine by sliding the Sigma_1 and Sigma_2 sliders (you can also tweak the settings with threshold and gain sliders. Once you are happy, check the "use Atlas" box and start creating!)
+4. Click save results and determine the path.
+If you want to edit the video files, select "load video" in the editor and proceed with same methode I gone over just now.
+
+## ReShade and HLSL
+Applying our effect to games is a little bit more problematic but using ReShade makes things a lot simpler. 
+1. Firstly install ReShade from their website (https://reshade.me/)
+2. Install ReShade on the game you want to play.
+3. This step can vary but I did it this way.
+   - Installation:
+      - Directly in the folder where the game files are sitting create another folder called "reshade-shaders". Inside create two new folders called "Shaders" and "Textures". 
+      - In first folder (Shaders) copy files "ASCII.fx" and "ReShade.fsh" that are in the "HLSL code for ReShade" folder.
+      - In the second one (Textures) copy "ascii.png" I provided in the "Textures" folder here.
+   - In Game
+      - Now in the game press the Home (or Pos1) key to open the ReShade overlay.
+      - If you don't see your shader in the list, click the Reload button at the bottom of the overlay.
+      - Check the box next to the shader name to enable it.
+   - Checking the Depth Buffers
+      - Go to the Add-ons tab (in newer ReShade versions) or the API tab (DX9DX11Vulkan). Look at the list of Depth Buffers.
+      - How to identify the right one. Resolution It must match your game resolution (e.g., 1920x1080). Draw Calls  Vertices Look for the buffer with the highest number of Draw Calls or Vertices. This usually indicates the main scene geometry.
+      - Check the box next to that buffer to force ReShade to use it.
+
+**Enjoy and create awesome art.**
+ 
