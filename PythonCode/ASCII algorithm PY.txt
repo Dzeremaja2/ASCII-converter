@@ -1,0 +1,299 @@
+# --- GLOBAL SETTINGS ---
+# 1. LAYERS
+DRAW_EDGES = (1, 0, 1)
+DRAW_INFILL = (1, 0, 1)
+USE_ATLAS = (0, 0, 1)
+
+# --- IMAGE ADJUSTMENTS ---
+BRIGHTNESS = (1.0, 0.0, 3.0) 
+CONTRAST = (1.0, 0.0, 3.0)
+
+# --- EDGE DETECTION ---
+SIGMA_1 = (1.0, 0.1, 10.0)
+SIGMA_2 = (3.0, 0.1, 20.0)
+GAIN = (10.0, 1.0, 50.0)
+THRESHOLD = (15, 0, 100) 
+
+# --- COLOR & THEME ---
+COLOR_PRESET = ["Black & White", "Original Colors", "Matrix", "Neon Demon", "Firelink", "Custom"]
+DYNAMIC_BRIGHTNESS = (1, 0, 1)
+
+# --- CUSTOM COLORS ---
+CUSTOM_FG_R = (255, 0, 255)
+CUSTOM_FG_G = (255, 0, 255)
+CUSTOM_FG_B = (255, 0, 255)
+CUSTOM_BG_R = (0, 0, 255)
+CUSTOM_BG_G = (0, 0, 255)
+CUSTOM_BG_B = (0, 0, 255)
+
+# --- POST PROCESSING ---
+USE_BLOOM = (0, 0, 1)
+BLOOM_INTENSITY = (2.0, 0.0, 5.0) 
+BLOOM_THRESHOLD = (200, 0, 255) # Lower this if you don't see glow
+
+USE_VIGNETTE = (0, 0, 1)
+VIGNETTE_STRENGTH = (0.5, 0.0, 1.0) # How dark the corners get
+VIGNETTE_RANGE = (0.4, 0.0, 1.0)    # Size of the clear center (Safe Zone)
+VIGNETTE_FEATHER = (0.5, 0.1, 1.0)  # Softness of the fade
+
+
+# ==========================================
+# PROCESSOR
+# ==========================================
+def process(src, atlas, params):
+    import cv2
+    import numpy as np
+    from PIL import Image
+
+    # --- TECHNICAL PARAMS ---
+    scale_edge = 1          
+    tile_size = 8           
+    levels = 10
+    vote_thresh = 8
+    idx_map = [0, 1, 2, 3]  
+
+    # --- READ UI PARAMS ---
+    draw_edges = int(params.get('DRAW_EDGES', 1)) > 0
+    draw_infill = int(params.get('DRAW_INFILL', 1)) > 0
+    use_atlas = int(params.get('USE_ATLAS', 0)) > 0
+    
+    preset = params.get('COLOR_PRESET', "Black & White")
+    dyn_bright = int(params.get('DYNAMIC_BRIGHTNESS', 1)) > 0
+    
+    # Post-Process Params
+    use_bloom = int(params.get('USE_BLOOM', 0)) > 0
+    bloom_str = float(params.get('BLOOM_INTENSITY', 2.0))
+    bloom_thresh = int(params.get('BLOOM_THRESHOLD', 200))
+    
+    use_vig = int(params.get('USE_VIGNETTE', 0)) > 0
+    vig_str = float(params.get('VIGNETTE_STRENGTH', 0.5))
+    vig_range = float(params.get('VIGNETTE_RANGE', 0.4))
+    vig_feather = float(params.get('VIGNETTE_FEATHER', 0.5))
+
+    s1 = float(params.get('SIGMA_1', 1.0))
+    s2 = float(params.get('SIGMA_2', 3.0))
+    s2 = max(s2, s1 + 0.1)
+    gain = float(params.get('GAIN', 10.0))
+    thresh = int(params.get('THRESHOLD', 15))
+    
+    bright = float(params.get('BRIGHTNESS', 1.0))
+    contrast = float(params.get('CONTRAST', 1.0))
+
+    # --- COLOR SCHEMES ---
+    schemes = {
+        "Black & White": ((255, 255, 255), (0, 0, 0)),
+        "Matrix":        ((0, 255, 50),    (0, 10, 0)), 
+        "Neon Demon":    ((255, 105, 180), (20, 5, 30)),
+        "Firelink":      ((255, 140, 0),   (30, 10, 5)),
+        "Custom":        (
+            (int(params.get('CUSTOM_FG_R', 255)), int(params.get('CUSTOM_FG_G', 255)), int(params.get('CUSTOM_FG_B', 255))),
+            (int(params.get('CUSTOM_BG_R', 0)),   int(params.get('CUSTOM_BG_G', 0)),   int(params.get('CUSTOM_BG_B', 0)))
+        )
+    }
+    
+    is_original_color = (preset == "Original Colors")
+    fg_color, bg_color = schemes.get(preset, schemes["Black & White"])
+
+    # 1. PREP & ADJUST IMAGE
+    h, w, _ = src.shape
+    h_trim = (h // tile_size) * tile_size
+    w_trim = (w // tile_size) * tile_size
+    src_trim = src[:h_trim, :w_trim]
+    
+    grid_cols = w_trim // tile_size
+    grid_rows = h_trim // tile_size
+    pixels_per_tile = tile_size * tile_size
+
+    # Apply Brightness/Contrast
+    src_adj = src_trim.astype(float)
+    src_adj = (src_adj - 128) * contrast + 128
+    src_adj = src_adj * bright
+    src_adj = np.clip(src_adj, 0, 255).astype(np.uint8)
+
+    # ==========================================
+    # PATH A: EDGES
+    # ==========================================
+    gray_edge = cv2.cvtColor(src_adj, cv2.COLOR_BGR2GRAY).astype(float)
+    blur1 = cv2.GaussianBlur(gray_edge, (0, 0), s1)
+    blur2 = cv2.GaussianBlur(gray_edge, (0, 0), s2)
+    dog = (blur1 - blur2) * gain
+    
+    binary_mask = np.zeros_like(dog, dtype=np.uint8)
+    binary_mask[dog > thresh] = 255
+
+    dx = cv2.Sobel(binary_mask, cv2.CV_64F, 1, 0, ksize=3)
+    dy = cv2.Sobel(binary_mask, cv2.CV_64F, 0, 1, ksize=3)
+    mag = cv2.magnitude(dx, dy)
+    
+    if not use_atlas:
+        return Image.fromarray(mag.astype(np.uint8))
+
+    angle = cv2.phase(dx, dy, angleInDegrees=True) % 180
+
+    tiled_mag = mag.reshape(grid_rows, tile_size, grid_cols, tile_size).swapaxes(1, 2)
+    flat_mag = tiled_mag.reshape(grid_rows, grid_cols, pixels_per_tile)
+    tiled_ang = angle.reshape(grid_rows, tile_size, grid_cols, tile_size).swapaxes(1, 2)
+    flat_ang = tiled_ang.reshape(grid_rows, grid_cols, pixels_per_tile)
+
+    active_edge_pixels = (flat_mag > 64) 
+    edge_pixel_counts = np.sum(active_edge_pixels, axis=2)
+
+    votes = np.full_like(flat_ang, 4, dtype=int)
+    votes[(flat_ang >= 67.5) & (flat_ang < 112.5)] = 0
+    votes[(flat_ang >= 22.5) & (flat_ang < 67.5)] = 1 
+    votes[(flat_ang >= 112.5) & (flat_ang < 157.5)] = 3
+    votes[votes == 4] = 2 
+    votes[~active_edge_pixels] = 4 
+
+    vote_counts = np.zeros((grid_rows, grid_cols, 4), dtype=int)
+    for i in range(4):
+        vote_counts[:, :, i] = np.sum(votes == i, axis=2)
+    winner_idx = np.argmax(vote_counts, axis=2)
+    edge_grid = np.where(edge_pixel_counts > vote_thresh, winner_idx, -1)
+
+    # ==========================================
+    # PATH B: DENSITY
+    # ==========================================
+    small_fill = cv2.resize(src_adj, (grid_cols, grid_rows), interpolation=cv2.INTER_AREA)
+    img_f = small_fill.astype(float)
+    
+    b_ch, g_ch, r_ch = cv2.split(img_f)
+    lum = 0.299*r_ch + 0.587*g_ch + 0.114*b_ch
+    bucket = np.floor((lum / 255.0) * (levels - 1)).astype(int)
+
+    # ==========================================
+    # RENDER: ASSEMBLING THE GRID
+    # ==========================================
+    atlas_np = np.array(atlas) 
+    aw, ah = atlas.size
+    tile_h = ah // 2 
+    
+    density_sprites = []
+    edge_sprites = []
+    
+    for i in range(aw // tile_h):
+        crop = atlas_np[0:tile_h, i*tile_h:(i+1)*tile_h]
+        if crop.shape[0] != tile_size: crop = cv2.resize(crop, (tile_size, tile_size), interpolation=cv2.INTER_NEAREST)
+        density_sprites.append(crop)
+
+    for i in range(aw // tile_h):
+        crop = atlas_np[tile_h:tile_h*2, i*tile_h:(i+1)*tile_h]
+        if crop.shape[0] != tile_size: crop = cv2.resize(crop, (tile_size, tile_size), interpolation=cv2.INTER_NEAREST)
+        edge_sprites.append(crop)
+
+    density_lookup = np.array(density_sprites)
+    edge_lookup = np.array(edge_sprites)
+    
+    final_grid = np.zeros((grid_rows, grid_cols, tile_size, tile_size, 4), dtype=np.uint8)
+    
+    bucket = np.clip(bucket, 0, len(density_sprites)-1)
+    if draw_infill:
+        final_grid = density_lookup[bucket].copy()
+
+    if draw_edges:
+        has_edge = (edge_grid != -1)
+        safe_indices = np.maximum(edge_grid, 0)
+        mapped_indices = np.clip(np.array(idx_map)[safe_indices], 0, len(edge_sprites)-1)
+        
+        edge_layer = edge_lookup[mapped_indices]
+        edge_a = edge_layer[..., 3] / 255.0
+        edge_rgb = edge_layer[..., :3]
+        bg_rgb = final_grid[..., :3]
+        
+        mask_5d = has_edge[..., None, None, None] 
+        mask_4d = has_edge[..., None, None]       
+        
+        comp_rgb = bg_rgb * (1.0 - edge_a[..., None]) + edge_rgb * edge_a[..., None]
+        np.copyto(final_grid[..., :3], comp_rgb.astype(np.uint8), where=mask_5d)
+        
+        if draw_infill:
+            final_grid[..., 3] = 255
+        else:
+             np.copyto(final_grid[..., 3], edge_layer[..., 3], where=mask_4d)
+
+    # Stitch
+    final_image_rgba = final_grid.swapaxes(1, 2).reshape(h_trim, w_trim, 4)
+    
+    # ==========================================
+    # COLORING & COMPOSITION
+    # ==========================================
+    ascii_intensity = final_image_rgba[..., 0].astype(float) / 255.0
+    ascii_alpha = final_image_rgba[..., 3].astype(float) / 255.0
+    
+    bg_layer = np.full((h_trim, w_trim, 3), bg_color, dtype=float)
+    
+    if is_original_color:
+        src_rgb = cv2.cvtColor(src_adj, cv2.COLOR_BGR2RGB)
+        fg_base = cv2.resize(src_rgb, (w_trim, h_trim), interpolation=cv2.INTER_NEAREST).astype(float)
+        bg_layer = np.zeros_like(bg_layer) 
+    else:
+        if dyn_bright:
+            lum_full = cv2.resize(lum.astype(np.uint8), (w_trim, h_trim), interpolation=cv2.INTER_NEAREST).astype(float) / 255.0
+            fg_base = np.array(fg_color).reshape(1, 1, 3) * lum_full[..., None]
+        else:
+            fg_base = np.full((h_trim, w_trim, 3), fg_color, dtype=float)
+        
+    ascii_mask = ascii_intensity[..., None] * ascii_alpha[..., None]
+    
+    if is_original_color:
+        final_comp = fg_base * ascii_mask
+    else:
+        final_comp = (fg_base * ascii_mask) + (bg_layer * (1.0 - ascii_mask))
+    
+    final_comp = np.clip(final_comp, 0, 255).astype(np.uint8)
+
+    # ==========================================
+    # POST PROCESSING: BLOOM & VIGNETTE
+    # ==========================================
+    
+    # 1. BLOOM (Improved Logic)
+    if use_bloom:
+        # Convert to float for safe subtraction
+        fc_float = final_comp.astype(float)
+        
+        # Calculate Threshold Mask
+        # Instead of a hard "0 or 1" mask, we subtract the threshold.
+        # Pixels at 210 with thresh 200 will glow slightly (10).
+        # Pixels at 255 will glow heavily (55).
+        bright_pass = np.maximum(0, fc_float - bloom_thresh)
+        
+        # Blur the bright pass
+        # Dynamic kernel size based on resolution (approx 2% of width)
+        k_size = int(w_trim * 0.02) | 1 # Ensure odd number
+        blur = cv2.GaussianBlur(bright_pass, (k_size, k_size), 0)
+        
+        # Additive Blending
+        final_bloom = fc_float + (blur * bloom_str)
+        final_comp = np.clip(final_bloom, 0, 255).astype(np.uint8)
+
+    # 2. VIGNETTE (Range & Feather Logic)
+    if use_vig:
+        Y, X = np.ogrid[:h_trim, :w_trim]
+        center_y, center_x = h_trim/2, w_trim/2
+        
+        # Calculate normalized distance (0.0 center -> 1.0 corner)
+        max_dist = np.sqrt(center_x**2 + center_y**2)
+        dist_map = np.sqrt((X - center_x)**2 + (Y - center_y)**2) / max_dist
+        
+        # Apply Range (Safe Zone)
+        # Remap [0, 1] to [vig_range, 1]
+        # Any pixel closer than vig_range becomes negative (will be clipped to 0)
+        mask = (dist_map - vig_range)
+        
+        # Apply Feather (Softness)
+        # We divide by feather to stretch the gradient
+        mask = mask / (vig_feather + 0.01) # Avoid div by zero
+        
+        # Clip to valid 0-1 range
+        mask = np.clip(mask, 0, 1)
+        
+        # Apply Strength
+        # 1.0 means full darkness, 0.0 means no effect
+        vig_map = 1.0 - (mask * vig_str)
+        
+        # Apply to image
+        vig_map = vig_map[..., None] # Add RGB dimension
+        final_comp = (final_comp * vig_map).astype(np.uint8)
+
+    return Image.fromarray(final_comp)
+

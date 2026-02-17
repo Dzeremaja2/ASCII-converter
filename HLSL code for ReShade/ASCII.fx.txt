@@ -1,0 +1,309 @@
+// =============================================================================
+// THESIS SHADER: FINAL (NO BLOOM + FIXED ORIENTATION)
+// =============================================================================
+
+#include "ReShade.fxh"
+
+// --- 0. SAFETY DEFINES ---
+#ifndef BUFFER_WIDTH
+    #define BUFFER_WIDTH 1920
+    #define BUFFER_HEIGHT 1080
+#endif
+
+// --- 1. TEXTURES & SAMPLERS ---
+texture ASCII_Atlas < source = "ascii.png"; > { Width = 80; Height = 16; Format = RGBA8; };
+sampler ASCIISampler { Texture = ASCII_Atlas; MagFilter = POINT; MinFilter = POINT; };
+
+// Pass 1: Luma (for infill)
+texture DetailBuffer { Width = BUFFER_WIDTH; Height = BUFFER_HEIGHT; Format = RGBA16F; };
+sampler DetailSampler { Texture = DetailBuffer; MagFilter = POINT; MinFilter = POINT; };
+
+// --- 2. UI PARAMETERS ---
+
+uniform int DebugMode <
+    ui_type = "combo";
+    ui_items = "Final Render\0Debug: Show Edges\0Debug: Show Zones (Red=FG, Blue=BG)\0";
+    ui_label = "Debug View";
+> = 0;
+
+// --- A. EDGE ENGINE SELECTION ---
+uniform int EdgeMode <
+    ui_category = "1. Edge Engine Main";
+    ui_type = "combo";
+    ui_items = "Depth (Original)\0Texture (DoG/Sobel)\0Both (Combined)\0";
+    ui_label = "Edge Detection Mode";
+> = 0;
+
+uniform bool UseAtlas < ui_category = "1. Edge Engine Main"; ui_label = "Use Atlas (ASCII)"; > = true;
+
+// --- B. ENGINE 1: DEPTH (ORIGINAL) ---
+uniform float Fg_Sensitivity < ui_category = "2. Engine: Depth Settings"; ui_type = "drag"; ui_min = 0.0; ui_max = 5000.0; ui_label = "FG Sensitivity"; > = 2500.0;
+uniform float Fg_Threshold < ui_category = "2. Engine: Depth Settings"; ui_type = "drag"; ui_min = 0.01; ui_max = 5.0; ui_label = "FG Threshold"; > = 0.5;
+uniform int Fg_Thickness < ui_category = "2. Engine: Depth Settings"; ui_type = "combo"; ui_items = "Standard (1px)\0Bold (2px)\0Heavy (3px)\0"; ui_label = "FG Thickness"; > = 1;
+
+uniform bool Bg_Enable < ui_category = "2. Engine: Depth Settings"; ui_label = "Enable BG Edges"; > = false;
+uniform float Bg_Sensitivity < ui_category = "2. Engine: Depth Settings"; ui_type = "drag"; ui_min = 0.0; ui_max = 5000.0; ui_label = "BG Sensitivity"; > = 500.0;
+uniform float Bg_Threshold < ui_category = "2. Engine: Depth Settings"; ui_type = "drag"; ui_min = 0.01; ui_max = 5.0; ui_label = "BG Threshold"; > = 1.5;
+
+// --- C. ENGINE 2: TEXTURE (DoG) ---
+uniform float Sigma_1 < ui_category = "3. Engine: Texture Settings (DoG)"; ui_type = "drag"; ui_min = 0.1; ui_max = 10.0; ui_label = "Blur Radius Small"; > = 1.0;
+uniform float Sigma_2 < ui_category = "3. Engine: Texture Settings (DoG)"; ui_type = "drag"; ui_min = 0.1; ui_max = 20.0; ui_label = "Blur Radius Large"; > = 3.0;
+uniform float DoG_Gain < ui_category = "3. Engine: Texture Settings (DoG)"; ui_type = "drag"; ui_min = 0.1; ui_max = 100.0; ui_label = "Edge Strength"; > = 10.0;
+uniform float Edge_Threshold < ui_category = "3. Engine: Texture Settings (DoG)"; ui_type = "drag"; ui_min = 0.0; ui_max = 1.0; ui_label = "Edge Threshold"; > = 0.15;
+
+// --- D. ZONES & DENSITY ---
+uniform float FocusPoint < ui_category = "4. Zones & Density"; ui_type = "drag"; ui_min = 0.0; ui_max = 1.0; ui_label = "Zone Split Point"; > = 0.05;
+
+uniform float FogStart < ui_category = "4. Zones & Density"; ui_type = "drag"; ui_min = 0.0; ui_max = 1.0; > = 0.05;
+uniform float FogEnd < ui_category = "4. Zones & Density"; ui_type = "drag"; ui_min = 0.0; ui_max = 1.0; > = 0.3;
+
+uniform float BackgroundDensity < 
+    ui_category = "4. Zones & Density"; 
+    ui_type = "drag"; ui_min = 0.0; ui_max = 1.0; 
+    ui_label = "Background Density"; 
+    ui_tooltip = "Controls which SYMBOLS are used in the distance. 0.0 = Distance becomes empty space.";
+> = 0.1;
+
+uniform float BackgroundBrightness < 
+    ui_category = "4. Zones & Density"; 
+    ui_type = "drag"; ui_min = 0.0; ui_max = 2.0; 
+    ui_label = "Background Brightness"; 
+    ui_tooltip = "Controls the COLOR brightness of the distance.";
+> = 0.5;
+
+// --- E. MAPPING ---
+uniform int Map_Flat < ui_category = "5. Mapping"; ui_type = "combo"; ui_items = "- \0/ \0| \0\\ \0"; ui_label = "Horizontal (-)"; > = 2; 
+uniform int Map_DiagA < ui_category = "5. Mapping"; ui_type = "combo"; ui_items = "- \0/ \0| \0\\ \0"; ui_label = "Diagonal A (\\)"; > = 3; 
+uniform int Map_Vert < ui_category = "5. Mapping"; ui_type = "combo"; ui_items = "- \0/ \0| \0\\ \0"; ui_label = "Vertical (|)"; > = 0; 
+uniform int Map_DiagB < ui_category = "5. Mapping"; ui_type = "combo"; ui_items = "- \0/ \0| \0\\ \0"; ui_label = "Diagonal B (/)"; > = 1; 
+
+// --- F. POST PROCESSING ---
+uniform float FlashProtection < ui_category = "6. Post Processing"; ui_type = "drag"; ui_min = 0.0; ui_max = 1.0; ui_label = "Muzzle Flash Limit"; > = 0.85;
+
+uniform bool UseVignette < ui_category = "6. Post Processing"; ui_label = "Enable Vignette"; > = false;
+uniform float VigStrength < ui_category = "6. Post Processing"; ui_type = "drag"; ui_min = 0.0; ui_max = 1.0; > = 0.5;
+
+// --- G. COLOR & THEME ---
+uniform float Brightness < ui_category = "7. Appearance"; ui_type = "drag"; ui_min = 0.0; ui_max = 3.0; > = 1.0;
+uniform float Contrast < ui_category = "7. Appearance"; ui_type = "drag"; ui_min = 0.0; ui_max = 3.0; > = 1.1;
+
+uniform bool DynamicBrightness < ui_category = "7. Appearance"; ui_label = "Dynamic Brightness"; > = true;
+
+uniform int ColorTheme <
+    ui_category = "7. Appearance";
+    ui_type = "combo";
+    ui_items = "Black & White\0Original Colors\0Matrix\0Neon\0Custom\0";
+> = 0;
+uniform float3 CustomFG < ui_category = "7. Appearance"; ui_type = "color"; > = float3(1.0, 1.0, 1.0);
+uniform float3 CustomBG < ui_category = "7. Appearance"; ui_type = "color"; > = float3(0.0, 0.0, 0.0);
+
+uniform float CharacterSize < ui_category = "8. Technical"; ui_type = "drag"; ui_min = 4.0; ui_max = 32.0; > = 8.0;
+
+// =============================================================================
+// FUNCTIONS
+// =============================================================================
+
+float GetLuma(float3 col) { return dot(col, float3(0.299, 0.587, 0.114)); }
+
+// Depth Magnitude (Engine 1)
+float GetMag(float2 uv, float2 pixelSize, float sens) {
+    float dLeft   = ReShade::GetLinearizedDepth(uv + float2(-pixelSize.x, 0));
+    float dUp     = ReShade::GetLinearizedDepth(uv + float2(0, -pixelSize.y));
+    float dRight  = ReShade::GetLinearizedDepth(uv + float2( pixelSize.x, 0));
+    float dDown   = ReShade::GetLinearizedDepth(uv + float2(0,  pixelSize.y));
+    float gx = (dRight - dLeft);
+    float gy = (dDown - dUp);
+    return sqrt(gx*gx + gy*gy) * sens;
+}
+
+// Blurred Luma (Engine 2 - DoG)
+float GetBlurredLuma(float2 uv, float sigma) {
+    float3 sum = 0;
+    float2 ps = ReShade::PixelSize;
+    // 5-tap Blur
+    sum += GetLuma(tex2D(ReShade::BackBuffer, uv).rgb);
+    sum += GetLuma(tex2D(ReShade::BackBuffer, uv + float2(-ps.x, -ps.y) * sigma).rgb);
+    sum += GetLuma(tex2D(ReShade::BackBuffer, uv + float2( ps.x, -ps.y) * sigma).rgb);
+    sum += GetLuma(tex2D(ReShade::BackBuffer, uv + float2(-ps.x,  ps.y) * sigma).rgb);
+    sum += GetLuma(tex2D(ReShade::BackBuffer, uv + float2( ps.x,  ps.y) * sigma).rgb);
+    return sum.x / 5.0;
+}
+
+// =============================================================================
+// PASS 1: PRE-PROCESS
+// =============================================================================
+void VS_Main(in uint id : SV_VertexID, out float4 pos : SV_Position, out float2 texcoord : TEXCOORD) {
+    texcoord.x = (id == 2) ? 2.0 : 0.0;
+    texcoord.y = (id == 1) ? 2.0 : 0.0;
+    pos = float4(texcoord * float2(2.0, -2.0) + float2(-1.0, 1.0), 0.0, 1.0);
+}
+
+float4 PS_PreProcess(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target {
+    float3 col = tex2D(ReShade::BackBuffer, texcoord).rgb;
+    col = (col - 0.5) * Contrast + 0.5; col *= Brightness;
+    float luma = GetLuma(col);
+    return float4(luma, 0.0, 0.0, 1.0);
+}
+
+// =============================================================================
+// PASS 2: RENDER ASCII (Dual Engine + Fixed Orientation)
+// =============================================================================
+float4 PS_RenderASCII(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target {
+    
+    // --- 1. SETUP ---
+    float size = max(CharacterSize, 1.0);
+    float2 screen = ReShade::ScreenSize;
+    float nColumns = screen.x / size;
+    float aspect = screen.y / screen.x;
+    float2 gridDims = float2(nColumns, nColumns * aspect);
+    
+    float2 gridUV = floor(texcoord * gridDims) / gridDims; 
+    float2 localUV = frac(texcoord * gridDims);
+    float2 pixelSize = ReShade::PixelSize * size;
+
+    float luma = tex2D(DetailSampler, gridUV).r;
+    float depth = ReShade::GetLinearizedDepth(gridUV);
+    bool isForeground = depth < FocusPoint;
+    bool isFlash = luma > FlashProtection;
+
+    // --- 2. DEPTH DENSITY ---
+    float fogFactor = smoothstep(FogStart, FogEnd, depth);
+    float density = lerp(1.0, BackgroundDensity, fogFactor);
+    float processedLuma = luma * density;
+
+    // --- 3. EDGE LOGIC ---
+    bool activeEdge = false;
+    bool edgeDepth = false;
+    bool edgeDoG = false;
+
+    if (!isFlash) {
+        
+        // ENGINE A: DEPTH
+        if (EdgeMode == 0 || EdgeMode == 2) {
+             if (isForeground) {
+                float magnitude = GetMag(gridUV, pixelSize, Fg_Sensitivity);
+                float threshold = Fg_Threshold;
+                if (magnitude < threshold && Fg_Thickness > 0) {
+                     float mN = GetMag(gridUV + float2(0, -pixelSize.y), pixelSize, Fg_Sensitivity);
+                     float mS = GetMag(gridUV + float2(0,  pixelSize.y), pixelSize, Fg_Sensitivity);
+                     float mW = GetMag(gridUV + float2(-pixelSize.x, 0), pixelSize, Fg_Sensitivity);
+                     float mE = GetMag(gridUV + float2( pixelSize.x, 0), pixelSize, Fg_Sensitivity);
+                     if (mN > threshold || mS > threshold || mW > threshold || mE > threshold) 
+                        magnitude = threshold + 0.1;
+                }
+                if (magnitude > threshold) edgeDepth = true;
+             } else if (Bg_Enable) {
+                 float magnitude = GetMag(gridUV, pixelSize, Bg_Sensitivity);
+                 if (magnitude > Bg_Threshold) edgeDepth = true;
+             }
+        }
+
+        // ENGINE B: TEXTURE (DoG)
+        if (EdgeMode == 1 || EdgeMode == 2) {
+             float b1 = GetBlurredLuma(gridUV, Sigma_1);
+             float b2 = GetBlurredLuma(gridUV, max(Sigma_2, Sigma_1 + 0.01));
+             float dog = (b1 - b2) * DoG_Gain;
+             if (dog > Edge_Threshold) edgeDoG = true;
+        }
+
+        activeEdge = edgeDepth || edgeDoG;
+    }
+
+    // --- DEBUG ---
+    float edgeVal = activeEdge ? 1.0 : 0.0;
+    if (DebugMode == 1) return float4(edgeVal, edgeVal, edgeVal, 1.0);
+    if (DebugMode == 2) return isForeground ? float4(1.0, 0.0, 0.0, 1.0) : float4(0.0, 0.0, 1.0, 1.0);
+
+    if (!UseAtlas) return float4(edgeVal, edgeVal, edgeVal, 1.0);
+
+    // --- 4. MAPPING (FIXED ORIENTATION) ---
+    float angle = 0.0;
+
+    if (activeEdge) {
+        // We calculate gradients (dx, dy).
+        // Standard atan2(dy, dx) gives the direction of the GRADIENT.
+        // The EDGE is perpendicular to the gradient.
+        // To get the Edge Angle, we shift the gradient angle by 90 degrees (+PI/2).
+        
+        float vN, vS, vW, vE;
+        float2 ps = pixelSize; // Use scaled pixel size for smoother angle
+
+        if (edgeDepth && !edgeDoG) {
+            // Use Depth for Angle
+            vN = ReShade::GetLinearizedDepth(gridUV + float2(0, -ps.y));
+            vS = ReShade::GetLinearizedDepth(gridUV + float2(0,  ps.y));
+            vW = ReShade::GetLinearizedDepth(gridUV + float2(-ps.x, 0));
+            vE = ReShade::GetLinearizedDepth(gridUV + float2( ps.x, 0));
+        } else {
+            // Use Luma for Angle (DoG or Both)
+            vN = GetLuma(tex2D(ReShade::BackBuffer, gridUV + float2(0, -ps.y)).rgb);
+            vS = GetLuma(tex2D(ReShade::BackBuffer, gridUV + float2(0,  ps.y)).rgb);
+            vW = GetLuma(tex2D(ReShade::BackBuffer, gridUV + float2(-ps.x, 0)).rgb);
+            vE = GetLuma(tex2D(ReShade::BackBuffer, gridUV + float2( ps.x, 0)).rgb);
+        }
+
+        float dy = vS - vN;
+        float dx = vE - vW;
+        
+        // Calculate Gradient Angle + 90 degree offset (1.5708 radians) for correct char alignment
+        angle = atan2(dy, dx) + 1.5708; 
+        
+        if (angle < 0.0) angle += 3.14159265;
+        // Modulo PI just in case
+        if (angle > 3.14159265) angle -= 3.14159265;
+    }
+
+    float normAngle = angle / 3.14159265;
+
+    float charX = 0.0; float charY = 0.0;
+    
+    if (activeEdge) {
+        float bucket = floor(normAngle * 4.0);
+        if (bucket > 3.0) bucket = 0.0;
+        int m = 0;
+        if (bucket == 0.0) m = Map_Flat;
+        if (bucket == 1.0) m = Map_DiagA;
+        if (bucket == 2.0) m = Map_Vert;
+        if (bucket == 3.0) m = Map_DiagB;
+        charX = float(m); 
+        charY = 1.0; 
+    } 
+    else {
+        charX = floor(saturate(processedLuma) * 9.0);
+        charY = 0.0;
+    }
+
+    float2 atlasUV;
+    atlasUV.x = (localUV.x + charX) / 10.0;
+    atlasUV.y = (localUV.y / 2.0) + (charY / 2.0);
+    float shape = tex2D(ASCIISampler, atlasUV).r;
+
+    // --- 5. COLOR ---
+    float3 fg, bg;
+    if (ColorTheme == 1) { fg = tex2D(ReShade::BackBuffer, gridUV).rgb * Brightness; bg = float3(0.0, 0.0, 0.0); }
+    else if (ColorTheme == 2) { fg = float3(0.0, 1.0, 0.3); bg = float3(0.0, 0.05, 0.0); }
+    else if (ColorTheme == 3) { fg = float3(1.0, 0.4, 0.7); bg = float3(0.1, 0.02, 0.1); }
+    else if (ColorTheme == 4) { fg = CustomFG; bg = CustomBG; }
+    else { fg = float3(1.0, 1.0, 1.0); bg = float3(0.0, 0.0, 0.0); }
+
+    float brightnessFactor = lerp(1.0, BackgroundBrightness, fogFactor);
+    float contentLuma = DynamicBrightness ? luma : 1.0;
+    float finalIntensity = (charY > 0.5) ? 1.0 : contentLuma;
+    
+    float3 finalColor = lerp(bg, fg * finalIntensity * brightnessFactor, shape);
+    
+    // Vignette (Applied here since Post pass is removed)
+    if (UseVignette) {
+        float2 dist = texcoord - 0.5; float len = length(dist);
+        float mask = saturate((len / 0.707 - 0.4) / 0.5);
+        finalColor *= (1.0 - mask * VigStrength);
+    }
+
+    return float4(finalColor, 1.0);
+}
+
+technique Thesis_ASCII_Final_NoBloom
+{
+    pass PreProcess { VertexShader = VS_Main; PixelShader = PS_PreProcess; RenderTarget = DetailBuffer; }
+    pass RenderASCII { VertexShader = VS_Main; PixelShader = PS_RenderASCII; }
+}
