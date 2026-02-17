@@ -10,4 +10,5 @@ I also wrote entire Thesis paper (since my graduation paper needs to be in physi
 **EDIT: current version of thesis paper is not complete but once I am done it will be published fully.**
 
 ## HOW TO USE 
-Let's firstly start with 2D tilemap engine. In the folder **PythonCode** you will find base for my Tilemap Engine written as "ascii_studioV.2.py" and **algorithm for ASCII conversion** named "ASCII algorithm PY". Before running the pythone script ***YOU WILL NEED TO INSTALL CUSTOMKTINKER LIBRARY FOR TILEMAP ENGINE TO WORK***
+Let's firstly start with 2D tilemap engine. In the folder **PythonCode** you will find base for my Tilemap Engine written as "ascii_studioV.2.py" and **algorithm for ASCII conversion** named "ASCII algorithm PY". Before running the pythone script ***YOU WILL NEED TO INSTALL CUSTOMKTINKER LIBRARY FOR TILEMAP ENGINE TO WORK***. <br/>
+After you installed all necessery libraries you can run the code and I encourige you to take a look at the thesis paper and get more familiar with the UI. 
