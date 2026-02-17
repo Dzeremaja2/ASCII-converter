@@ -11,4 +11,8 @@ I also wrote entire Thesis paper (since my graduation paper needs to be in physi
 
 ## HOW TO USE 
 Let's firstly start with 2D tilemap engine. In the folder **PythonCode** you will find base for my Tilemap Engine written as "ascii_studioV.2.py" and **algorithm for ASCII conversion** named "ASCII algorithm PY". Before running the pythone script ***YOU WILL NEED TO INSTALL CUSTOMKTINKER LIBRARY FOR TILEMAP ENGINE TO WORK***. <br/>
-After you installed all necessery libraries you can run the code and I encourige you to take a look at the thesis paper and get more familiar with the UI. 
+After you installed all necessery libraries you can run the code and I encourage you to take a look at the thesis paper and get more familiar with the UI. 
+1. You load wanted image into the right top window;
+2. Paste the ASCII algorithm PY
+3. **Load ASCII atlas texture** that is provided in "Textures" folder (choose one named only "ASCII")
+   - Now you are supposed to see something in the result window on the right side. If there is nothing to show, press the Force refresh button. You should see black and white image with outlines. These are here to help you dial the looks of edge engine by sliding the Sigma_1 and Sigma_2 sliders (you can also tweak the settings with threshold and gain sliders)
