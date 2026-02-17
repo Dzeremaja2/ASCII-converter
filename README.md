@@ -37,5 +37,5 @@ Applying our effect to games is a little bit more problematic but using ReShade 
       - How to identify the right one. Resolution It must match your game resolution (e.g., 1920x1080). Draw Calls  Vertices Look for the buffer with the highest number of Draw Calls or Vertices. This usually indicates the main scene geometry.
       - Check the box next to that buffer to force ReShade to use it.
 
-**Enjoy and create awesome art.**
+**Enjoy and create awesome art!**
  
