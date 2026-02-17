@@ -9,3 +9,5 @@ I also wrote entire Thesis paper (since my graduation paper needs to be in physi
 
 **EDIT: current version of thesis paper is not complete but once I am done it will be published fully.**
 
+## HOW TO USE 
+Let's firstly start with 2D tilemap engine. In the folder (docs/PythonCode) you will find
